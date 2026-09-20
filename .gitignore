@@ -1,0 +1,42 @@
+# --- build output -----------------------------------------------------------
+build/
+builds/
+out/
+cmake-build-*/
+CMakeUserPresets.json
+
+# --- plugin bundles / compiled artefacts -----------------------------------
+*.vst3/
+*.vst3
+*.component/
+*.component
+*.exe
+*.dll
+*.lib
+*.obj
+*.o
+*.a
+*.so
+*.dylib
+*.pdb
+*.ilk
+*.exp
+*.iobj
+*.ipdb
+
+# --- IDE / editor -----------------------------------------------------------
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+*.sln.docstates
+
+# --- logs / temp / OS ------------------------------------------------------
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+desktop.ini
