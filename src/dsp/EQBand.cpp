@@ -149,8 +149,18 @@ static juce::dsp::IIR::Coefficients<float>::Ptr makeAnalogCoeff (Param::FilterTy
 
 void EQBand::update()
 {
-    const auto rbjCoeffs = designRbjSections (curType_, curFreq_, curGain_, curQ_, curSlope_, sampleRate_);
+    auto rbjCoeffs = designRbjSections (curType_, curFreq_, curGain_, curQ_, curSlope_, sampleRate_);
     const size_t n = rbjCoeffs.size();
+
+    // Design-time safety: keep every section's poles strictly inside the unit
+    // circle. The RBJ cookbook is stable for every reachable parameter
+    // combination (verified), so this never fires in practice - it only makes
+    // an escape impossible by construction if the ranges ever change.
+    for (auto& c : rbjCoeffs)
+    {
+        if (std::abs (c.a2) >= 1.0)
+            c.a2 = c.a2 < 0.0 ? -0.999999 : 0.999999;
+    }
 
     if (rbjSectionsL_.size() != n)
     {
@@ -220,6 +230,7 @@ void EQBand::processSample (float& left, float& right) noexcept
         update();
         coeffType_ = curType_; coeffFreq_ = curFreq_; coeffGain_ = curGain_;
         coeffQ_ = curQ_; coeffSlope_ = curSlope_;
+        coeffsExact_ = enabled_;   // the snap above makes this build exact
     }
 
     if (!enabled_)
@@ -240,15 +251,46 @@ void EQBand::processSample (float& left, float& right) noexcept
         curGain_ += (targetGain_ - curGain_) * smoothFactor_;
         curQ_    += (targetQ_ - curQ_) * smoothFactor_;
 
+        // Targets are moving: the next arrival needs a fresh exact build.
+        coeffsExact_ = false;
+    }
+    else if (! coeffsExact_)
+    {
+        // The smoothing has finished (all deltas are below the stop
+        // thresholds). Snap to the targets so the final build is EXACT: the
+        // old absolute 0.5 Hz rebuild threshold used to freeze the
+        // coefficients up to 0.5 Hz below the target - the whole bandwidth of
+        // a Q = 40 low-frequency bell, i.e. a ~9 dB response error.
+        curFreq_ = targetFreq_;
+        curGain_ = targetGain_;
+        curQ_    = targetQ_;
+    }
+
+    // Rebuild decision. NOTE: deliberately OUTSIDE the needSmooth block so it
+    // also runs at rest (where the snap above just happened).
+    //   * the frequency threshold is RELATIVE (0.1% of the centre frequency,
+    //     at least 0.02 Hz), so the mid-move freeze error scales with the
+    //     filter being built;
+    //   * once the values have fully arrived, one final EXACT build runs so an
+    //     idle band's coefficients match its parameters bit for bit.
+    {
+        const bool converged = curType_ == targetType_ && curSlope_ == targetSlope_
+                            && curFreq_ == targetFreq_ && curGain_ == targetGain_
+                            && curQ_ == targetQ_;
+
+        const float freqThreshold = juce::jmax (0.02f, curFreq_ * 0.001f);
+
         if (curType_ != coeffType_ ||
             curSlope_ != coeffSlope_ ||
-            std::abs (curFreq_ - coeffFreq_) > 0.5f ||
+            std::abs (curFreq_ - coeffFreq_) > freqThreshold ||
             std::abs (curGain_ - coeffGain_) > 0.01f ||
-            std::abs (curQ_ - coeffQ_) > 0.0005f)
+            std::abs (curQ_ - coeffQ_) > 0.0005f ||
+            (converged && ! coeffsExact_))
         {
             coeffType_ = curType_; coeffSlope_ = curSlope_;
             coeffFreq_ = curFreq_; coeffGain_ = curGain_; coeffQ_ = curQ_;
             update();
+            coeffsExact_ = converged;
         }
     }
 
@@ -268,6 +310,14 @@ void EQBand::processSample (float& left, float& right) noexcept
             right = rbjSectionsR_[i].processSample (right);
         }
     }
+}
+
+void EQBand::resetFilterState() noexcept
+{
+    for (auto& s : rbjSectionsL_) s.reset();
+    for (auto& s : rbjSectionsR_) s.reset();
+    for (auto& s : analogSectionsL_) s.reset();
+    for (auto& s : analogSectionsR_) s.reset();
 }
 
 float EQBand::magnitudeAt (float freq, float sampleRate) const

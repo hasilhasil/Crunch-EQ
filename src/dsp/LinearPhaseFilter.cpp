@@ -37,7 +37,12 @@ void LinearPhaseFilter::setImpulseResponse (const float* ir, int length)
     fft_->perform (fftIn_.data(), irSpectrum_.data(), false);
 
     latency_ = blockSize_ + (irLength_ - 1) / 2;
-    reset();
+
+    // Deliberately NO reset() here: clearing the FIFOs on every IR change
+    // would drop the in-flight audio and emit a block of silence, which is
+    // exactly what dragging a band node used to do (the IR is rebuilt on
+    // every parameter change). Callers that need a flush - prepare(), or
+    // entering linear-phase mode - call reset() explicitly instead.
 }
 
 void LinearPhaseFilter::reset()

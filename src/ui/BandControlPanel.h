@@ -41,6 +41,7 @@ private:
     void addComboWithoutCaption (juce::ComboBox& box);
     void applyThemeColours();
     void refreshBypassState();
+    void refreshQualityEnabled();
 
     ProQ3CloneAudioProcessor& processor_;
 

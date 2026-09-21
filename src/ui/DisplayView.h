@@ -82,6 +82,14 @@ private:
     bool  spectrumValid_ = false;
     bool  spectrumHasFrame_ = false;
 
+    // Cached spectrum geometry. The paths are rebuilt only when a new analyser
+    // frame arrives - never inside paint() - because every repaint used to
+    // build six juce::Paths (open + closed + copy per layer) with per-frame
+    // heap growth, and the meters trigger repaints up to 60x/s.
+    juce::Path spectrumPreFill_, spectrumPreStroke_;
+    juce::Path spectrumPostFill_, spectrumPostStroke_;
+    bool spectrumPathsValid_ = false;
+
     // One biquad section of the current curve, flattened over every enabled
     // band. Designing the coefficients once per parameter change (instead of
     // once per curve point) is what makes the curve affordable to draw.
@@ -93,6 +101,10 @@ private:
     std::vector<float> responseDb_;
     bool  responseDirty_ = true;
     float responseSampleRate_ = 0.0f;
+
+    // Cached curve geometry, rebuilt only when the curve data (or the component
+    // size) changes - never per repaint.
+    juce::Path responsePath_;
 
     // --- static grid cache (background, lines, axis labels) -----------------
     juce::Image gridImage_;

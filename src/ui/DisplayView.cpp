@@ -42,6 +42,11 @@ DisplayView::~DisplayView()
 void DisplayView::resized()
 {
     settingsButton_.setBounds (4, 4, 24, 24);
+
+    // Both cached geometries are in component coordinates, so a resize
+    // invalidates them (they are rebuilt lazily on the next paint).
+    spectrumPathsValid_ = false;
+    responseDirty_      = true;
 }
 
 float DisplayView::gainScaleDb() const
@@ -132,10 +137,20 @@ void DisplayView::updateDisplayTargets()
     spectrumPost_ = post;
     spectrumValid_ = true;
     spectrumHasFrame_ = true;
+    spectrumPathsValid_ = false;   // geometry changed: rebuild on next paint
 }
 
 void DisplayView::timerCallback()
 {
+    // The editor window is being dragged or resized (FL Studio moves plugin
+    // editors as their own top-level window, one window-position change per
+    // mouse sample). Stand down completely: the OS-driven repaints after each
+    // move own the message loop during a drag, and our animation repaints
+    // would only compete with them. Everything catches up on the first tick
+    // after the drag ends.
+    if (processor_.isWindowDragging())
+        return;
+
     updateDisplayTargets();
 
     const float inDb  = juce::Decibels::gainToDecibels (processor_.getInputPeak() + 1.0e-9f);
@@ -169,8 +184,14 @@ void DisplayView::timerCallback()
     lastPeakIn_   = peakInDb_;
     lastPeakOut_  = peakOutDb_;
 
-    if (spectrumHasFrame_ || metersMoved)
+    if (spectrumHasFrame_)
         repaint();
+    else if (metersMoved)
+        // Meters only: repaint just the meter strip instead of the whole
+        // display (grid blit + spectrum fills + curve). The meter ballistics
+        // decay for ~1 s after the audio stops, which used to cost a full
+        // repaint per tick for a bar that is the only thing moving.
+        repaint (juce::Rectangle<int> (plotWidth(), 0, kMeterWidth, getHeight()));
 }
 
 void DisplayView::updatePeakHold (float& peakDb, juce::uint32& holdUntilMs,
@@ -471,7 +492,7 @@ void DisplayView::drawSpectrum (juce::Graphics& g)
 
     // Paths are built straight from the published analyser points: the previous
     // version's spectrum look (no extra shaping, no peak-hold line).
-    const auto makePath = [&] (const std::array<float, kPoints>& db) -> juce::Path
+    const auto makeOpen = [&] (const std::array<float, kPoints>& db) -> juce::Path
     {
         juce::Path p;
         bool started = false;
@@ -485,14 +506,31 @@ void DisplayView::drawSpectrum (juce::Graphics& g)
         return p;
     };
 
+    // Rebuild only when the frame (or the component height) changed: paint()
+    // runs up to 60x/s while the meters alone can force most of those repaints,
+    // and rebuilding six paths per repaint was pure per-frame heap churn.
+    if (! spectrumPathsValid_)
+    {
+        spectrumPreStroke_  = makeOpen (spectrumPre_);
+        spectrumPostStroke_ = makeOpen (spectrumPost_);
+
+        spectrumPreFill_  = spectrumPreStroke_;
+        spectrumPostFill_ = spectrumPostStroke_;
+
+        for (juce::Path* fill : { &spectrumPreFill_, &spectrumPostFill_ })
+        {
+            fill->lineTo (freqToX (spectrumFreqs_.back()), (float) getHeight());
+            fill->lineTo (freqToX (spectrumFreqs_.front()), (float) getHeight());
+            fill->closeSubPath();
+        }
+
+        spectrumPathsValid_ = true;
+    }
+
     const auto fillUnder = [&] (juce::Graphics& gr, const juce::Path& p, juce::Colour top, juce::Colour bottom)
     {
-        juce::Path filled (p);
-        filled.lineTo (freqToX (spectrumFreqs_.back()), (float) getHeight());
-        filled.lineTo (freqToX (spectrumFreqs_.front()), (float) getHeight());
-        filled.closeSubPath();
         gr.setGradientFill (juce::ColourGradient (top, 0.0f, 0.0f, bottom, 0.0f, (float) getHeight(), false));
-        gr.fillPath (filled);
+        gr.fillPath (p);
     };
 
     const int mode = (int) processor_.apvts.getRawParameterValue (Param::analyzerMode)->load();
@@ -510,18 +548,18 @@ void DisplayView::drawSpectrum (juce::Graphics& g)
 
     if (mode == 2 || mode == 3)   // Post -> wet signal after EQ + colour (grey layer)
     {
-        fillUnder (g, makePath (spectrumPost_), dry.withAlpha (0.42f), dry.withAlpha (0.08f));
+        fillUnder (g, spectrumPostFill_, dry.withAlpha (0.42f), dry.withAlpha (0.08f));
         g.setColour (dry.withAlpha (0.55f));
-        g.strokePath (makePath (spectrumPost_), juce::PathStrokeType (1.0f));
+        g.strokePath (spectrumPostStroke_, juce::PathStrokeType (1.0f));
     }
 
     if (mode == 1 || mode == 3)   // Pre  -> original dry signal (accent layer)
     {
-        fillUnder (g, makePath (spectrumPre_), accentColour().withAlpha (0.65f), accentColour().withAlpha (0.10f));
+        fillUnder (g, spectrumPreFill_, accentColour().withAlpha (0.65f), accentColour().withAlpha (0.10f));
 
         // white outline of the dry layer (drawn last so nothing covers it)
         g.setColour (juce::Colours::white.withAlpha (0.95f));
-        g.strokePath (makePath (spectrumPre_), juce::PathStrokeType (2.0f));
+        g.strokePath (spectrumPreStroke_, juce::PathStrokeType (2.0f));
     }
 }
 
@@ -588,6 +626,20 @@ void DisplayView::updateResponseCurve()
 
         responseDb_[(size_t) i] = (float) db;
     }
+
+    // Cache the stroked geometry next to the data so drawResponseCurve() does
+    // not rebuild a 320-point path on every repaint.
+    responsePath_.clear();
+    for (size_t i = 0; i < responseFreqs_.size(); ++i)
+    {
+        const float x = freqToX (responseFreqs_[i]);
+        const float y = dbToY (responseDb_[i]);
+
+        if (i == 0)
+            responsePath_.startNewSubPath (x, y);
+        else
+            responsePath_.lineTo (x, y);
+    }
 }
 
 void DisplayView::drawResponseCurve (juce::Graphics& g)
@@ -595,18 +647,8 @@ void DisplayView::drawResponseCurve (juce::Graphics& g)
     if (responseFreqs_.empty())
         return;
 
-    juce::Path p;
-    bool started = false;
-    for (size_t i = 0; i < responseFreqs_.size(); ++i)
-    {
-        const float x = freqToX (responseFreqs_[i]);
-        const float y = dbToY (responseDb_[i]);
-        if (!started) { p.startNewSubPath (x, y); started = true; }
-        else p.lineTo (x, y);
-    }
-
     g.setColour (accentColour());
-    g.strokePath (p, juce::PathStrokeType (2.0f));
+    g.strokePath (responsePath_, juce::PathStrokeType (2.0f));
 }
 
 void DisplayView::drawBandNodes (juce::Graphics& g)
@@ -732,7 +774,13 @@ void DisplayView::paint (juce::Graphics& g)
     refreshGridCache();
     g.drawImageAt (gridImage_, 0, 0);
 
-    drawSpectrum (g);
+    // While the window is being dragged, every OS move event already forces a
+    // full repaint; the spectrum layers are the expensive part of the frame,
+    // so they are dropped for those repaints only (the grid, curve, nodes and
+    // meters stay correct). Normal ticks redraw everything.
+    if (! processor_.isWindowDragging())
+        drawSpectrum (g);
+
     updateResponseCurve();
     drawResponseCurve (g);
     drawBandNodes (g);
@@ -756,6 +804,11 @@ void DisplayView::refreshGridCache()
     if (getWidth() <= 0 || getHeight() <= 0)
         return;
 
+    // Opaque ARGB (the editor pins the peer to the software renderer, see
+    // PluginEditor::forceSoftwareRenderer): the blit in paint() is then a
+    // direct same-format copy. RGB was tried here and reverted - under the
+    // software renderer it only adds a per-pixel unpack, and under Direct2D
+    // a software image is re-uploaded to the GPU on every drawImageAt().
     gridImage_ = juce::Image (juce::Image::ARGB, getWidth(), getHeight(), true);
     {
         juce::Graphics gi (gridImage_);

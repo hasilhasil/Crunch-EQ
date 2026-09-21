@@ -18,6 +18,11 @@ public:
     int getLatencySamples() const noexcept { return latency_; }
     int getFftSize() const noexcept        { return fftSize_; }
 
+    // True once an impulse response has been installed (and the spectrum is
+    // therefore usable). A prepared-but-empty filter would output silence, so
+    // callers can use this to force an immediate rebuild.
+    bool hasImpulseResponse() const noexcept { return irLength_ > 0 && fft_ != nullptr; }
+
 private:
     void processOneChannel (int channel, const float* input, float* output, int numSamples);
 

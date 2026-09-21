@@ -25,6 +25,11 @@ public:
 
     void processSample (float& left, float& right) noexcept;
 
+    // Clears the filter states only (coefficients and parameters untouched).
+    // Used by the EqualizerDSP non-finite safety net to recover a band whose
+    // marginally-stable extreme coefficients ever produced a runaway state.
+    void resetFilterState() noexcept;
+
     float magnitudeAt (float freq, float sampleRate) const;
     static float magnitudeAt (Param::FilterType type, float freq, float gain, float q, int slope,
                               float sr, float atFreq);
@@ -60,6 +65,12 @@ private:
     float coeffGain_ = Param::kGainDefault;
     float coeffQ_    = Param::kQDefault;
     int   coeffSlope_ = 12;
+
+    // True when the coefficients were last built from values that had fully
+    // arrived at the targets (see processSample). Guarantees one exact build
+    // after every parameter move, so an idle band's response matches its
+    // parameters regardless of the mid-move rebuild throttle.
+    bool coeffsExact_ = false;
 
     float sampleRate_ = 48000.0f;
     float smoothFactor_ = 0.02f;

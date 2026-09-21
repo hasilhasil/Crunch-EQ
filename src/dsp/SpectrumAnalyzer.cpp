@@ -105,6 +105,27 @@ void SpectrumAnalyzer::processFrame (const float* data)
     const float norm = 4.0f / (float) fftSize_;
     const float refFreq = 1000.0f;
 
+    // Asymmetric temporal smoothing, matching how FabFilter Pro-Q's "Speed"
+    // setting behaves: the spectrum RISES instantly (attack = 0, so transients
+    // are never smeared) and FALLS with an exponential release time constant.
+    // A longer release gives more time to read the spectrum before it
+    // disappears, which is what makes the motion look calm instead of frantic.
+    // The previous symmetric EMA slowed the rise as much as the fall and still
+    // boiled frame to frame.
+    //
+    // Frame timing is per FRAME, not per bin: computing it inside the loop
+    // used to call getMillisecondCounter() and exp() fftSize/2+1 times per
+    // frame - tens of thousands of syscalls/transcendentals per second on the
+    // engine thread for a value that is constant across the whole loop.
+    const auto nowMs = juce::Time::getMillisecondCounter();
+    const double dt = (lastFrameMs_ == 0)
+                        ? 1.0 / 60.0
+                        : juce::jlimit (0.001, 0.100,
+                                        (double) (nowMs - lastFrameMs_) / 1000.0);
+    lastFrameMs_ = nowMs;
+
+    const float kRelease = (float) (1.0 - std::exp (-dt / (kReleaseMs * 0.001)));
+
     float maxDelta = 0.0f;
 
     for (int k = 0; k <= fftSize_ / 2; ++k)
@@ -115,22 +136,6 @@ void SpectrumAnalyzer::processFrame (const float* data)
         const float freq = (float) k * (float) sampleRate_ / (float) fftSize_;
         if (freq > 1.0f)
             db += tilt_ * std::log2 (freq / refFreq);
-
-        // Asymmetric temporal smoothing, matching how FabFilter Pro-Q's
-        // "Speed" setting behaves: the spectrum RISES instantly (attack = 0, so
-        // transients are never smeared) and FALLS with an exponential release
-        // time constant. A longer release gives more time to read the spectrum
-        // before it disappears, which is what makes the motion look calm
-        // instead of frantic. The previous symmetric EMA slowed the rise as
-        // much as the fall and still boiled frame to frame.
-        const auto nowMs = juce::Time::getMillisecondCounter();
-        const double dt = (lastFrameMs_ == 0)
-                            ? 1.0 / 60.0
-                            : juce::jlimit (0.001, 0.100,
-                                            (double) (nowMs - lastFrameMs_) / 1000.0);
-        lastFrameMs_ = nowMs;
-
-        const float kRelease = (float) (1.0 - std::exp (-dt / (kReleaseMs * 0.001)));
 
         float& current = binLevelsDb_[(size_t) k];
         const float prev = hasFrame_ ? prevLevelsDb_[(size_t) k] : db;

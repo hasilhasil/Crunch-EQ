@@ -51,6 +51,7 @@ void ProQ3CloneAudioProcessor::prepareToPlay (double sampleRate, int samplesPerB
     spec.numChannels = (juce::uint32) getTotalNumInputChannels();
 
     eq_.prepare (spec);
+    preDelay_.prepare (kMaxDisplayDelay);
     color_.prepare ((float) sampleRate);
     cacheValid_ = false;
     latencyDirty_ = true;
@@ -146,14 +147,19 @@ void ProQ3CloneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
     {
         float sum = 0.0f;
         for (int ch = 0; ch < numChannels; ++ch)
-        {
-            const float v = buffer.getReadPointer (ch)[s];
-            sum += v;
-            const float a = std::abs (v);
-            if (a > inPeak) inPeak = a;
-        }
-        analysisScratchPre_[(size_t) s] = sum / (float) numChannels;
+            sum += buffer.getReadPointer (ch)[s];
+
+        // The linear-phase engine delays the post tap (and the output meter)
+        // by getLatencySamples(); run the pre tap (and this peak) through the
+        // same delay so the analyser layers and both meters stay time-aligned.
+        // In zero-latency / natural-phase mode the line is a passthrough.
+        const float pre = preDelay_.process (sum / (float) numChannels);
+
+        analysisScratchPre_[(size_t) s] = pre;
         analysisScratchPost_[(size_t) s] = 0.0f;
+
+        const float a = std::abs (pre);
+        if (a > inPeak) inPeak = a;
     }
     inputPeak_.store (inPeak);
 
@@ -161,7 +167,9 @@ void ProQ3CloneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
     if (latencyDirty_)
     {
-        setLatencySamples (eq_.getLatencySamples());
+        const int latency = eq_.getLatencySamples();
+        setLatencySamples (latency);
+        preDelay_.setLength (latency);   // keep the pre tap aligned with the post tap
         latencyDirty_ = false;
     }
 

@@ -93,6 +93,13 @@ BandControlPanel::BandControlPanel (ProQ3CloneAudioProcessor& processor)
 
     applyThemeColours();
 
+    // QUALITY only drives the linear-phase FIR engine (FFT size / IR length),
+    // so it is greyed out and its popup suppressed in Zero Latency and Natural
+    // Phase mode. Listen to phaseMode so the state follows the parameter from
+    // any source (UI combo, host automation, state recall).
+    processor_.apvts.addParameterListener (Param::phaseMode, this);
+    refreshQualityEnabled();
+
     // Start with the same band the display selected (or "no band" / disabled
     // state when nothing is selected yet).
     setSelectedBand (processor_.getSelectedBand());
@@ -100,6 +107,8 @@ BandControlPanel::BandControlPanel (ProQ3CloneAudioProcessor& processor)
 
 BandControlPanel::~BandControlPanel()
 {
+    processor_.apvts.removeParameterListener (Param::phaseMode, this);
+
     if (selectedBand_ >= 0)
         processor_.apvts.removeParameterListener (Param::bandEnabled (selectedBand_), this);
 }
@@ -202,8 +211,40 @@ void BandControlPanel::refreshBypassState()
         bypassButton_.setToggleState (v->load() < 0.5f, juce::dontSendNotification);
 }
 
+// QUALITY only affects the linear-phase FIR engine (FFT size / IR length), so
+// in Zero Latency and Natural Phase mode it is disabled and dimmed: JUCE hides
+// an open popup when a combo becomes disabled and never opens one from a
+// disabled combo, and the alpha dims the box, its caption and its text the
+// same way the band controls dim when no band is selected.
+void BandControlPanel::refreshQualityEnabled()
+{
+    const bool linear = (int) processor_.apvts.getRawParameterValue (Param::phaseMode)->load()
+                        == (int) Param::PhaseMode::LinearPhase;
+
+    const float alpha = linear ? 1.0f : 0.45f;
+
+    qualityBox_.setEnabled (linear);
+    qualityBox_.setAlpha (alpha);
+    qualityLabel_.setAlpha (alpha);
+}
+
 void BandControlPanel::parameterChanged (const juce::String& parameterID, float newValue)
 {
+    if (parameterID == Param::phaseMode)
+    {
+        // The host may call this from the audio thread, so bounce the widget
+        // update to the message thread.
+        juce::Component::SafePointer<BandControlPanel> safe (this);
+
+        juce::MessageManager::callAsync ([safe]() mutable
+        {
+            if (safe != nullptr)
+                safe->refreshQualityEnabled();
+        });
+
+        return;
+    }
+
     if (parameterID != Param::bandEnabled (selectedBand_))
         return;
 
