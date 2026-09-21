@@ -219,6 +219,15 @@ Spectrum Grab 直接拖 "the white output spectrum line" 上的峰。
 测试注意：JUCE Standalone 会把插件状态持久化到 %APPDATA%\Crunch EQ\Crunch EQ.settings，
 会覆盖测试构建的默认频段；测默认参数前需删掉该文件。
 
+-----------------------------------------------
+【二之九、OUT 电量表顶部描边与 IN 对齐（260921）】
+症状：OUT 条看起来没有 IN 那样的顶部描边条。
+原因：OUT 的 2px 顶边本来用的是主题 accent，而 OUT 渐变的起点也是 accent，
+所以那条线被渐变"吃掉"了；IN 的顶边是实心 inputFill 灰、衬在半透明填充上才明显。
+修复：drawMeter 增加 capColour 参数，两条表都用 CrunchPalette::inputFill 画
+顶部 2px 描边（用户选 B：跟 IN 完全同色），填充部分保持不变（IN 平色 / OUT 渐变）。
+实测：冒烟测试通过，安装后与构建产物哈希一致。
+
 ------------------------------------------------
 【三、源码结构】
   src\PluginProcessor.h/.cpp   —— DSP 主处理（EQ + 染色模块 + 时延 + 频谱数据）

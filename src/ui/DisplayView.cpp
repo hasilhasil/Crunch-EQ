@@ -635,13 +635,15 @@ void DisplayView::drawMeters (juce::Graphics& g)
 
     // Meters. The IN meter keeps its flat colour; the OUT meter is drawn with a
     // vertical gradient spanning the full bar height: the top starts at the
-    // theme accent, the bottom ends at the theme's "current" colour
+    // theme accent and the bottom ends at the theme's "current" colour
     // (outputLevel in the dark Blue/Red themes, a darker shade of the accent in
-    // the Cream theme). The 2 px cap line that marks the current level stays
-    // solid accent.
+    // the Cream theme). Both bars share the same solid cap line colour
+    // (inputFill, like the IN meter): the accent colour would disappear into
+    // the OUT gradient, whose top stop is the accent itself.
     const auto drawMeter = [&] (int x, int w, float db, const juce::String& label,
                                 const juce::String& dbText, juce::Colour col,
-                                juce::Colour bottomColour, bool gradient)
+                                juce::Colour bottomColour, juce::Colour capColour,
+                                bool gradient)
     {
         g.setColour (CrunchPalette::meterBg (processor_.isLightTheme()));
         g.fillRect (x, 0, w, getHeight());
@@ -660,7 +662,7 @@ void DisplayView::drawMeters (juce::Graphics& g)
 
         g.fillRect (x, (int) y, w, getHeight() - (int) y);
 
-        g.setColour (col);
+        g.setColour (capColour);
         g.fillRect (x, (int) y, w, 2);
 
         g.setFont (CrunchLookAndFeel::uiFont (11.0f, 500));
@@ -680,10 +682,14 @@ void DisplayView::drawMeters (juce::Graphics& g)
     const juce::Colour outBottom = light ? accent.darker (0.5f)
                                          : CrunchPalette::outputLevel (light);
 
+    // Top stroke bar: identical on both meters (the IN meter's colour), so the
+    // two bars read the same way.
+    const juce::Colour capColour = CrunchPalette::inputFill (light);
+
     drawMeter (bar1x, barW, meterInDb_,  "IN",  juce::String (meterInDbLabel_, 1),
-               CrunchPalette::inputFill (light), CrunchPalette::inputFill (light), false);
+               CrunchPalette::inputFill (light), CrunchPalette::inputFill (light), capColour, false);
     drawMeter (bar2x, barW, meterOutDb_, "OUT", juce::String (meterOutDbLabel_, 1),
-               accent, outBottom, true);
+               accent, outBottom, capColour, true);
 }
 
 void DisplayView::paint (juce::Graphics& g)
