@@ -186,6 +186,39 @@ Analyzer 模式语义不变：Pre=只画灰层，Post=只画蓝层+白描边，P
   · 剩余延迟的大头是 2048 点 FFT 窗本身（窗中心 ≈21 ms）+ 平滑 + UI 拾取，
     已接近该窗长的物理下限；若想更快可把窗长降到 1024（频率分辨率减半）。
 
+-----------------------------------------------
+【二之八、频谱三层 + 非对称 release + 输出表渐变（260921）】
+先研究 FabFilter Pro-Q 3/4 官方文档（https://www.fabfilter.com/help/pro-q/using/analyzer）：
+Pro-Q 的 "Speed" 设置原文就是 "selects the release speed of the spectrum"，即
+**上升瞬时、下降按时间常数**的非对称包络；Resolution（1024/2048/4096/8192 点）
+决定更新率与 attack 快慢；Freeze 是最大保持；Pre/Post/SC-Ext 是三个频谱开关；
+Spectrum Grab 直接拖 "the white output spectrum line" 上的峰。
+我们已具备"更新率与宿主块大小解耦"（SpectrumEngine），缺的只有非对称包络。
+
+1. 非对称 attack/release（src/dsp/SpectrumAnalyzer.cpp processFrame）
+   逐 bin：新值 ≥ 旧值 → 立即采用（attack = 0）；新值 < 旧值 → 按 release 时间
+   常数指数逼近。kReleaseMs = 20（用户选 20ms；已提示原有效平滑约 25ms，20ms
+   体感接近原状，要更平缓可调到 60–150ms）。dt 按真实帧间隔算（夹 1–100ms）。
+   替代原对称 EMA alpha=0.35。实测干层反应延迟 74 ms → 30 ms，发布帧率 57.8 fps。
+
+2. 两层数据源对调（src/ui/DisplayView.cpp drawSpectrum）
+   层次顺序（自下而上）：灰层 = 湿声（EQ+染色之后，spectrumPost_）→
+   主题色层 = 原始干声（spectrumPre_）→ 白描边压在主题色层顶边。
+   Analyzer 模式保持信号含义：Pre=只画主题色层（干声）、Post=只画灰层（湿声）、
+   Pre+Post=两层。EQ 衰减处干声(主题色)露出在湿声(灰)之外，增益处反之。
+   实测（6 频段 ±6/+9 dB 扫频信号）：绘图区像素 主题色(干) 127046 /
+   灰(湿) 2000 / 白描边 1916；干湿在 200Hz 处最大相差 10.9 dB。
+   踩坑：最初两层画反顺序，白描边被灰层盖住（520 像素 vs 应有的 1916），
+   按"前面主题色的 layer"改成灰在底后才正确。
+
+3. 输出电平条渐变（src/ui/DisplayView.cpp drawMeters）
+   整条全高渐变：顶 = 主题 accent；底 = CrunchPalette::outputLevel（红/蓝主题）
+   或 accent.darker(0.5)（cream 主题）。顶部 2px 当前电平线保持纯 accent。
+   输入条完全不动。
+
+测试注意：JUCE Standalone 会把插件状态持久化到 %APPDATA%\Crunch EQ\Crunch EQ.settings，
+会覆盖测试构建的默认频段；测默认参数前需删掉该文件。
+
 ------------------------------------------------
 【三、源码结构】
   src\PluginProcessor.h/.cpp   —— DSP 主处理（EQ + 染色模块 + 时延 + 频谱数据）

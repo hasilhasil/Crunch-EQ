@@ -116,13 +116,30 @@ void SpectrumAnalyzer::processFrame (const float* data)
         if (freq > 1.0f)
             db += tilt_ * std::log2 (freq / refFreq);
 
-        // Per-frame temporal smoothing. Kept light (0.35): the log-band energy
-        // averaging in getLevels() already removes the per-bin ripple, and every
-        // extra smoothing here is extra visible latency (0.5 cost ~33 ms).
-        const float alpha = 0.35f;
+        // Asymmetric temporal smoothing, matching how FabFilter Pro-Q's
+        // "Speed" setting behaves: the spectrum RISES instantly (attack = 0, so
+        // transients are never smeared) and FALLS with an exponential release
+        // time constant. A longer release gives more time to read the spectrum
+        // before it disappears, which is what makes the motion look calm
+        // instead of frantic. The previous symmetric EMA slowed the rise as
+        // much as the fall and still boiled frame to frame.
+        const auto nowMs = juce::Time::getMillisecondCounter();
+        const double dt = (lastFrameMs_ == 0)
+                            ? 1.0 / 60.0
+                            : juce::jlimit (0.001, 0.100,
+                                            (double) (nowMs - lastFrameMs_) / 1000.0);
+        lastFrameMs_ = nowMs;
+
+        const float kRelease = (float) (1.0 - std::exp (-dt / (kReleaseMs * 0.001)));
+
         float& current = binLevelsDb_[(size_t) k];
         const float prev = hasFrame_ ? prevLevelsDb_[(size_t) k] : db;
-        current = alpha * prev + (1.0f - alpha) * db;
+
+        if (db >= prev)
+            current = db;                                  // attack: instant
+        else
+            current = prev + (db - prev) * kRelease;        // release: exponential
+
         prevLevelsDb_[(size_t) k] = current;
 
         maxDelta = juce::jmax (maxDelta, std::abs (current - prev));

@@ -136,6 +136,8 @@ void ProQ3CloneAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
     // Mono copies for the display. The scratch buffers are members so the audio
     // thread never allocates; they are written to the lock-free analysis rings.
+    // Mono copies for the display. The scratch buffers are members so the audio
+    // thread never allocates; they are written to the lock-free analysis rings.
     analysisScratchPre_.resize ((size_t) jmax (1, numSamples));
     analysisScratchPost_.resize ((size_t) jmax (1, numSamples));
 

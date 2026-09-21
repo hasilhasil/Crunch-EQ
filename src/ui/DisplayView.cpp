@@ -467,27 +467,29 @@ void DisplayView::drawSpectrum (juce::Graphics& g)
     const bool light = processor_.isLightTheme();
 
     // Layer order (bottom -> top):
-    //   1. grey  : the ORIGINAL DRY signal (input, before EQ + colour)
-    //   2. blue  : the FINAL OUTPUT (after EQ + colour), filled with the accent
-    //   3. white : a stroke curve on top of the blue output layer
-    // Drawing the dry layer first means EQ cuts show grey sticking out beyond
-    // the blue, and boosts show blue beyond the grey.
+    //   1. grey  : the WET signal (after the EQ + colour modules) -> spectrumPost_
+    //   2. accent: the ORIGINAL DRY signal (before any processing) -> spectrumPre_
+    //   3. white : a stroke curve on top of the accent (dry) layer
+    // The dry layer sits in front, so EQ cuts show the dry (accent) sticking out
+    // beyond the wet (grey) and boosts show the wet beyond the dry.
+    // The Analyzer mode keeps its SIGNAL meaning: Pre = dry = the accent layer,
+    // Post = wet = the grey layer, Pre + Post = both layers.
     const auto dry = CrunchPalette::inputFill (light);
 
-    if (mode == 1 || mode == 3)
+    if (mode == 2 || mode == 3)   // Post -> wet signal after EQ + colour (grey layer)
     {
-        fillUnder (g, makePath (spectrumPre_), dry.withAlpha (0.42f), dry.withAlpha (0.08f));
+        fillUnder (g, makePath (spectrumPost_), dry.withAlpha (0.42f), dry.withAlpha (0.08f));
         g.setColour (dry.withAlpha (0.55f));
-        g.strokePath (makePath (spectrumPre_), juce::PathStrokeType (1.0f));
+        g.strokePath (makePath (spectrumPost_), juce::PathStrokeType (1.0f));
     }
 
-    if (mode == 2 || mode == 3)
+    if (mode == 1 || mode == 3)   // Pre  -> original dry signal (accent layer)
     {
-        fillUnder (g, makePath (spectrumPost_), accentColour().withAlpha (0.65f), accentColour().withAlpha (0.10f));
+        fillUnder (g, makePath (spectrumPre_), accentColour().withAlpha (0.65f), accentColour().withAlpha (0.10f));
 
-        // white outline of the output layer
+        // white outline of the dry layer (drawn last so nothing covers it)
         g.setColour (juce::Colours::white.withAlpha (0.95f));
-        g.strokePath (makePath (spectrumPost_), juce::PathStrokeType (2.0f));
+        g.strokePath (makePath (spectrumPre_), juce::PathStrokeType (2.0f));
     }
 }
 
@@ -631,7 +633,15 @@ void DisplayView::drawMeters (juce::Graphics& g)
         return (1.0f - frac) * (float) getHeight();
     };
 
-    const auto drawMeter = [&] (int x, int w, float db, const juce::String& label, const juce::String& dbText, juce::Colour col)
+    // Meters. The IN meter keeps its flat colour; the OUT meter is drawn with a
+    // vertical gradient spanning the full bar height: the top starts at the
+    // theme accent, the bottom ends at the theme's "current" colour
+    // (outputLevel in the dark Blue/Red themes, a darker shade of the accent in
+    // the Cream theme). The 2 px cap line that marks the current level stays
+    // solid accent.
+    const auto drawMeter = [&] (int x, int w, float db, const juce::String& label,
+                                const juce::String& dbText, juce::Colour col,
+                                juce::Colour bottomColour, bool gradient)
     {
         g.setColour (CrunchPalette::meterBg (processor_.isLightTheme()));
         g.fillRect (x, 0, w, getHeight());
@@ -641,8 +651,15 @@ void DisplayView::drawMeters (juce::Graphics& g)
             g.drawHorizontalLine ((int) meterY (dbTick), (float) x, (float) (x + w));
 
         const float y = meterY (juce::jlimit (minDb, maxDb, db));
-        g.setColour (col.withAlpha (0.35f));
+
+        if (gradient)
+            g.setGradientFill (juce::ColourGradient (col,          0.0f, 0.0f,
+                                                     bottomColour, 0.0f, (float) getHeight(), false));
+        else
+            g.setColour (col.withAlpha (0.35f));
+
         g.fillRect (x, (int) y, w, getHeight() - (int) y);
+
         g.setColour (col);
         g.fillRect (x, (int) y, w, 2);
 
@@ -656,8 +673,17 @@ void DisplayView::drawMeters (juce::Graphics& g)
     };
 
     const bool light = processor_.isLightTheme();
-    drawMeter (bar1x, barW, meterInDb_,  "IN",  juce::String (meterInDbLabel_, 1),  CrunchPalette::inputFill (light));
-    drawMeter (bar2x, barW, meterOutDb_, "OUT", juce::String (meterOutDbLabel_, 1), CrunchPalette::outputLevel (light));
+    const juce::Colour accent = accentColour();
+
+    // Cream (light) ends at a darker accent; Blue/Red end at the current OUT
+    // colour so the bar fades towards the tone it used before.
+    const juce::Colour outBottom = light ? accent.darker (0.5f)
+                                         : CrunchPalette::outputLevel (light);
+
+    drawMeter (bar1x, barW, meterInDb_,  "IN",  juce::String (meterInDbLabel_, 1),
+               CrunchPalette::inputFill (light), CrunchPalette::inputFill (light), false);
+    drawMeter (bar2x, barW, meterOutDb_, "OUT", juce::String (meterOutDbLabel_, 1),
+               accent, outBottom, true);
 }
 
 void DisplayView::paint (juce::Graphics& g)

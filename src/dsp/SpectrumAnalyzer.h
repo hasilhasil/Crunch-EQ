@@ -47,6 +47,12 @@ private:
     std::vector<float> prevLevelsDb_;
     bool hasFrame_ = false;
 
+    // Asymmetric (Pro-Q "Speed" style) release time constant in milliseconds.
+    // The spectrum rises instantly and falls with this time constant; raise it
+    // for a calmer, slower-falling display.
+    static constexpr double kReleaseMs = 20.0;
+    juce::uint32 lastFrameMs_ = 0;
+
     juce::uint32 frameCounter_ = 0;
     float lastFrameDeltaDb_ = 0.0f;
 
