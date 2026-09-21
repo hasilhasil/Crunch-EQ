@@ -101,6 +101,7 @@ private:
     bool  gridCacheLight_ = false;
 
     float lastMeterIn_ = -200.0f, lastMeterOut_ = -200.0f;
+    float lastPeakIn_ = -200.0f, lastPeakOut_ = -200.0f;
 
     juce::TextButton settingsButton_;
 
@@ -111,6 +112,20 @@ private:
 
     float meterInDb_ = -120.0f;
     float meterOutDb_ = -120.0f;
+
+    // Peak-hold for the meter top strokes (Pro-Q 3 style): the stroke rides the
+    // peak and holds it for kPeakHoldMs before falling back, so a short peak
+    // stays readable. The bar itself keeps its fast (instant up / 60 dB per
+    // second down) ballistics.
+    static constexpr int kPeakHoldMs = 2000;          // 1-3 s, as requested
+    static constexpr float kPeakFallDbPerSec = 30.0f; // after the hold expires
+
+    float peakInDb_  = -120.0f, peakOutDb_  = -120.0f;
+    juce::uint32 peakInHoldUntilMs_ = 0, peakOutHoldUntilMs_ = 0;
+    juce::uint32 lastMeterMs_ = 0;
+
+    void updatePeakHold (float& peakDb, juce::uint32& holdUntilMs,
+                         float levelDb, juce::uint32 nowMs, double dt);
 
     float meterInDbLabel_ = -120.0f;
     float meterOutDbLabel_ = -120.0f;

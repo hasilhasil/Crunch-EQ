@@ -146,16 +146,48 @@ void DisplayView::timerCallback()
     meterInDbLabel_  = meterInDb_;
     meterOutDbLabel_ = meterOutDb_;
 
+    // Peak-hold for the top strokes. dt is measured so the fall rate does not
+    // depend on the timer rate.
+    const auto nowMs = juce::Time::getMillisecondCounter();
+    const double dt = (lastMeterMs_ == 0)
+                        ? 1.0 / 60.0
+                        : juce::jlimit (0.001, 0.100, (double) (nowMs - lastMeterMs_) / 1000.0);
+    lastMeterMs_ = nowMs;
+
+    updatePeakHold (peakInDb_,  peakInHoldUntilMs_,  inDb,  nowMs, dt);
+    updatePeakHold (peakOutDb_, peakOutHoldUntilMs_, outDb, nowMs, dt);
+
     // Repaint when the picture can actually differ: a new engine frame (or the
-    // shaped curve still moving towards it), or a moving meter.
+    // shaped curve still moving towards it), or a moving meter / peak stroke.
     const bool metersMoved = std::abs (meterInDb_  - lastMeterIn_)  > 0.01f
-                          || std::abs (meterOutDb_ - lastMeterOut_) > 0.01f;
+                          || std::abs (meterOutDb_ - lastMeterOut_) > 0.01f
+                          || std::abs (peakInDb_   - lastPeakIn_)   > 0.01f
+                          || std::abs (peakOutDb_  - lastPeakOut_)  > 0.01f;
 
     lastMeterIn_  = meterInDb_;
     lastMeterOut_ = meterOutDb_;
+    lastPeakIn_   = peakInDb_;
+    lastPeakOut_  = peakOutDb_;
 
     if (spectrumHasFrame_ || metersMoved)
         repaint();
+}
+
+void DisplayView::updatePeakHold (float& peakDb, juce::uint32& holdUntilMs,
+                                  float levelDb, juce::uint32 nowMs, double dt)
+{
+    if (levelDb >= peakDb)
+    {
+        // New peak: snap up and (re)start the hold.
+        peakDb = levelDb;
+        holdUntilMs = nowMs + (juce::uint32) kPeakHoldMs;
+    }
+    else if (nowMs >= holdUntilMs)
+    {
+        // Hold expired: fall back towards the current level, never below it, so
+        // the stroke always sits on top of the bar.
+        peakDb = juce::jmax (levelDb, peakDb - (float) (kPeakFallDbPerSec * dt));
+    }
 }
 
 void DisplayView::setFloatParam (const juce::String& id, float value)
@@ -637,13 +669,13 @@ void DisplayView::drawMeters (juce::Graphics& g)
     // vertical gradient spanning the full bar height: the top starts at the
     // theme accent and the bottom ends at the theme's "current" colour
     // (outputLevel in the dark Blue/Red themes, a darker shade of the accent in
-    // the Cream theme). Both bars share the same solid cap line colour
-    // (inputFill, like the IN meter): the accent colour would disappear into
-    // the OUT gradient, whose top stop is the accent itself.
-    const auto drawMeter = [&] (int x, int w, float db, const juce::String& label,
-                                const juce::String& dbText, juce::Colour col,
-                                juce::Colour bottomColour, juce::Colour capColour,
-                                bool gradient)
+    // the Cream theme). The top stroke rides the held peak (peak hold, Pro-Q 3
+    // style) and is white in the dark themes so it stands out against the bar;
+    // in Cream it keeps the IN meter's grey.
+    const auto drawMeter = [&] (int x, int w, float db, float peakDb,
+                                const juce::String& label, const juce::String& dbText,
+                                juce::Colour col, juce::Colour bottomColour,
+                                juce::Colour capColour, bool gradient)
     {
         g.setColour (CrunchPalette::meterBg (processor_.isLightTheme()));
         g.fillRect (x, 0, w, getHeight());
@@ -652,7 +684,8 @@ void DisplayView::drawMeters (juce::Graphics& g)
         for (float dbTick = -60.0f; dbTick <= 0.0f; dbTick += 20.0f)
             g.drawHorizontalLine ((int) meterY (dbTick), (float) x, (float) (x + w));
 
-        const float y = meterY (juce::jlimit (minDb, maxDb, db));
+        const float y  = meterY (juce::jlimit (minDb, maxDb, db));
+        const float py = meterY (juce::jlimit (minDb, maxDb, peakDb));
 
         if (gradient)
             g.setGradientFill (juce::ColourGradient (col,          0.0f, 0.0f,
@@ -662,8 +695,9 @@ void DisplayView::drawMeters (juce::Graphics& g)
 
         g.fillRect (x, (int) y, w, getHeight() - (int) y);
 
+        // top stroke: the held peak, so short peaks stay visible
         g.setColour (capColour);
-        g.fillRect (x, (int) y, w, 2);
+        g.fillRect (x, (int) py, w, 2);
 
         g.setFont (CrunchLookAndFeel::uiFont (11.0f, 500));
         g.setColour (textColour());
@@ -682,13 +716,14 @@ void DisplayView::drawMeters (juce::Graphics& g)
     const juce::Colour outBottom = light ? accent.darker (0.5f)
                                          : CrunchPalette::outputLevel (light);
 
-    // Top stroke bar: identical on both meters (the IN meter's colour), so the
-    // two bars read the same way.
-    const juce::Colour capColour = CrunchPalette::inputFill (light);
+    // Top stroke: white in the dark Blue/Red themes (stands out against both the
+    // grey IN bar and the OUT gradient); Cream keeps the IN meter's grey.
+    const juce::Colour capColour = light ? CrunchPalette::inputFill (light)
+                                         : juce::Colours::white;
 
-    drawMeter (bar1x, barW, meterInDb_,  "IN",  juce::String (meterInDbLabel_, 1),
+    drawMeter (bar1x, barW, meterInDb_,  peakInDb_,  "IN",  juce::String (meterInDbLabel_, 1),
                CrunchPalette::inputFill (light), CrunchPalette::inputFill (light), capColour, false);
-    drawMeter (bar2x, barW, meterOutDb_, "OUT", juce::String (meterOutDbLabel_, 1),
+    drawMeter (bar2x, barW, meterOutDb_, peakOutDb_, "OUT", juce::String (meterOutDbLabel_, 1),
                accent, outBottom, capColour, true);
 }
 
